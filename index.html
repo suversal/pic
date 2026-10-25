@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MagicPin</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%236366f1'/%3E%3Cstop offset='1' stop-color='%23ec4899'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='8' fill='url(%23g)'/%3E%3Crect x='8' y='7' width='16' height='8' rx='2' fill='white'/%3E%3Crect x='8' y='17' width='16' height='8' rx='2' fill='white' opacity='.7'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app" id="app">
+    <!-- 顶栏 -->
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo" aria-hidden="true"></span>
+        <span class="brand-name">MagicPin</span>
+        <span class="badge" title="图片只在本机浏览器里处理，不会上传"><i data-icon="lock" data-size="12"></i>本地处理</span>
+        <span class="divider" aria-hidden="true"></span>
+        <div class="history">
+          <button id="undo" class="icon-btn" type="button" data-tip="撤销 ⌘Z" aria-label="撤销"><i data-icon="undo"></i></button>
+          <button id="redo" class="icon-btn" type="button" data-tip="重做 ⇧⌘Z" aria-label="重做"><i data-icon="redo"></i></button>
+        </div>
+      </div>
+      <div class="topbar-center">
+        <div class="zoom-ctl disabled" id="zoom-ctl">
+          <button id="zoom-out" class="icon-btn small" type="button" data-tip="缩小 ⌘-" aria-label="缩小"><i data-icon="minus" data-size="16"></i></button>
+          <input id="zoom-slider" class="zoom-slider" type="range" min="0" max="100" step="0.5" aria-label="缩放">
+          <button id="zoom-in" class="icon-btn small" type="button" data-tip="放大 ⌘=" aria-label="放大"><i data-icon="plus" data-size="16"></i></button>
+          <div class="zoom-menu-wrap">
+            <button id="zoom-label" class="zoom-label" type="button" aria-haspopup="true" aria-expanded="false">100%<i data-icon="chevronDown" data-size="12"></i></button>
+            <div id="zoom-menu" class="menu" hidden>
+              <button type="button" data-zoom="fit"><span>适应窗口</span><kbd>⌘0</kbd></button>
+              <button type="button" data-zoom="0.5"><span>50%</span></button>
+              <button type="button" data-zoom="1"><span>100%</span><kbd>⌘1</kbd></button>
+              <button type="button" data-zoom="2"><span>200%</span></button>
+              <button type="button" data-zoom="4"><span>400%</span></button>
+            </div>
+          </div>
+          <button id="zoom-fit" class="icon-btn small" type="button" data-tip="适应窗口 ⌘0" aria-label="适应窗口"><i data-icon="fit" data-size="15"></i></button>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <button id="theme" class="icon-btn" type="button" data-tip="外观：跟随系统" aria-label="切换浅色或深色"><i data-icon="contrast"></i></button>
+        <button id="shortcuts" class="icon-btn" type="button" data-tip="快捷键 ?" aria-label="快捷键"><i data-icon="keyboard"></i></button>
+        <button id="copy" class="btn" type="button"><i data-icon="copy" data-size="16"></i>复制</button>
+        <div class="export-wrap">
+          <button id="export-toggle" class="btn primary" type="button" aria-haspopup="true" aria-expanded="false">
+            <i data-icon="download" data-size="16"></i>导出<i data-icon="chevronDown" data-size="14"></i>
+          </button>
+          <div id="export-pop" class="popover" hidden>
+            <div class="pop-row">
+              <span class="pop-label">范围</span>
+              <div class="seg" id="export-mode">
+                <button type="button" data-value="all">整张拼图</button>
+                <button type="button" data-value="each">逐张导出</button>
+              </div>
+            </div>
+            <div class="pop-row">
+              <span class="pop-label">格式</span>
+              <div class="seg" id="export-format">
+                <button type="button" data-value="image/png">PNG</button>
+                <button type="button" data-value="image/jpeg">JPEG</button>
+                <button type="button" data-value="image/webp">WebP</button>
+              </div>
+            </div>
+            <div class="pop-row">
+              <span class="pop-label">尺寸</span>
+              <div class="seg" id="export-scale">
+                <button type="button" data-value="0.5">0.5×</button>
+                <button type="button" data-value="1">1×</button>
+                <button type="button" data-value="2">2×</button>
+              </div>
+            </div>
+            <label class="pop-row switch-row">
+              <span>
+                <span class="pop-title">适配 X</span>
+                <span class="pop-desc">超过 5 MB 时自动压缩或缩小</span>
+              </span>
+              <input id="export-x" type="checkbox" class="switch">
+            </label>
+            <div class="pop-meta" id="export-meta"></div>
+            <div class="pop-actions">
+              <button id="pop-copy" class="btn" type="button"><i data-icon="copy" data-size="16"></i>复制 <kbd>⇧⌘C</kbd></button>
+              <button id="download" class="btn primary" type="button"><i data-icon="download" data-size="16"></i>下载 <kbd>⌘S</kbd></button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- 左侧：图片与布局 -->
+    <aside class="sidebar left">
+      <section class="panel-section">
+        <div class="section-head">
+          <h2>图片 <span id="image-count" class="count"></span></h2>
+          <div class="head-actions">
+            <button id="clear" class="text-btn" type="button">清空</button>
+            <button id="add" class="icon-btn small" type="button" data-tip="添加图片" aria-label="添加图片"><i data-icon="plus" data-size="16"></i></button>
+          </div>
+        </div>
+        <input id="file" type="file" accept="image/*,.heic,.heif" multiple hidden>
+        <ol id="list" class="image-list"></ol>
+        <button id="add-zone" class="add-zone" type="button">
+          <i data-icon="imagePlus" data-size="20"></i>
+          <span>添加图片</span>
+          <small>拖入、粘贴或点击选择</small>
+        </button>
+      </section>
+
+      <section class="panel-section">
+        <div class="section-head"><h2>布局</h2></div>
+        <div class="seg seg-icons" id="layout-seg">
+          <button type="button" data-value="vertical"><i data-icon="vertical" data-size="16"></i>纵向</button>
+          <button type="button" data-value="horizontal"><i data-icon="horizontal" data-size="16"></i>横向</button>
+          <button type="button" data-value="grid"><i data-icon="grid" data-size="16"></i>网格</button>
+        </div>
+        <div id="columns-row" class="row">
+          <span class="row-label">列数</span>
+          <div class="seg compact" id="columns-seg">
+            <button type="button" data-value="2">2</button>
+            <button type="button" data-value="3">3</button>
+            <button type="button" data-value="4">4</button>
+          </div>
+        </div>
+        <div class="row" id="fit-row">
+          <span class="row-label" id="fit-label">统一宽度</span>
+          <div class="seg compact" id="fit-seg">
+            <button type="button" data-value="none">关</button>
+            <button type="button" data-value="min">按最窄</button>
+            <button type="button" data-value="max">按最宽</button>
+          </div>
+        </div>
+        <div class="row" id="align-row">
+          <span class="row-label">对齐</span>
+          <div class="seg compact" id="align-seg">
+            <button type="button" data-value="start">顶部</button>
+            <button type="button" data-value="center">居中</button>
+            <button type="button" data-value="end">底部</button>
+          </div>
+        </div>
+        <label class="slider-row">
+          <span class="row-label">间距</span>
+          <input id="gap" type="range" min="0" max="120" step="2">
+          <output id="gap-out"></output>
+        </label>
+        <div class="btn-pair">
+          <button id="stitch" class="btn subtle" type="button"><i data-icon="wand" data-size="16"></i>长截图拼接</button>
+          <button id="reset-crops" class="btn subtle" type="button" data-tip="所有图片恢复原始尺寸"><i data-icon="reset" data-size="15"></i>还原裁切</button>
+        </div>
+        <p class="hint">按顺序添加连续截图，自动裁掉重复部分。用<b>裁剪工具（C）</b>或双击图片可以手动调整截取范围：拖边缘裁剪，拖图片上下移动。</p>
+      </section>
+    </aside>
+
+    <!-- 中间：画布 -->
+    <main class="workspace" id="workspace">
+      <div id="viewport" class="viewport">
+        <div id="empty" class="empty">
+          <div class="empty-art" aria-hidden="true">
+            <span class="card c1"></span><span class="card c2"></span><span class="card c3"></span>
+          </div>
+          <h1>把截图拖到这里</h1>
+          <p>或按 <kbd>⌘V</kbd> 粘贴，支持一次多张</p>
+          <div class="empty-actions">
+            <button id="empty-add" class="btn primary" type="button"><i data-icon="imagePlus" data-size="16"></i>选择图片</button>
+            <button id="demo" class="btn" type="button"><i data-icon="sparkles" data-size="16"></i>用示例图试试</button>
+          </div>
+          <ul class="empty-features">
+            <li><i data-icon="wand" data-size="14"></i>长截图自动拼接</li>
+            <li><i data-icon="mask" data-size="14"></i>隐私遮挡</li>
+            <li><i data-icon="palette" data-size="14"></i>设备外框与背景</li>
+          </ul>
+        </div>
+        <div id="wrap" class="canvas-wrap" hidden>
+          <canvas id="canvas"></canvas>
+          <textarea id="editor" class="text-editor" spellcheck="false" placeholder="输入文字" hidden></textarea>
+        </div>
+      </div>
+
+      <div id="props" class="ctxbar" hidden></div>
+      <nav id="tools" class="dock" aria-label="工具"></nav>
+
+      <div id="size-info" class="size-pill"></div>
+      <div class="drop-overlay" aria-hidden="true">
+        <div class="drop-card"><i data-icon="imagePlus" data-size="28"></i><span>松开即可添加</span></div>
+      </div>
+      <div id="notice" class="toast" role="status" aria-live="polite"></div>
+    </main>
+
+    <!-- 右侧：外观 -->
+    <aside class="sidebar right">
+      <section class="panel-section">
+        <div class="section-head">
+          <h2>模板</h2>
+          <div class="head-actions">
+            <button id="shuffle" class="icon-btn small" type="button" data-tip="随机换一个 S" aria-label="随机模板"><i data-icon="shuffle" data-size="15"></i></button>
+            <button id="save-style" class="icon-btn small" type="button" data-tip="把当前外观存为模板" aria-label="保存模板"><i data-icon="bookmark" data-size="15"></i></button>
+          </div>
+        </div>
+        <div id="gallery" class="gallery"></div>
+      </section>
+
+      <section class="panel-section">
+        <div class="section-head"><h2>图片外框</h2></div>
+        <div id="frames" class="frames"></div>
+        <label id="title-row" class="field-inline">
+          <span class="row-label" id="title-label">窗口标题</span>
+          <input id="window-title" type="text" placeholder="可留空">
+        </label>
+        <label id="border-row" class="slider-row">
+          <span class="row-label">边框</span>
+          <input id="border" type="range" min="2" max="160" step="2">
+          <output id="border-out"></output>
+        </label>
+        <label id="radius-row" class="slider-row">
+          <span class="row-label">圆角</span>
+          <input id="radius" type="range" min="0" max="80" step="2">
+          <output id="radius-out"></output>
+        </label>
+        <label id="shadow-row" class="slider-row">
+          <span class="row-label">阴影</span>
+          <input id="shadow" type="range" min="0" max="160" step="4">
+          <output id="shadow-out"></output>
+        </label>
+        <p id="shadow-note" class="section-note">阴影会投在背景画布上，背景关闭时没有阴影。<button id="shadow-bg-on" class="link-btn" type="button">打开背景画布</button></p>
+      </section>
+
+      <section class="panel-section" id="bg-section">
+        <div class="section-head">
+          <h2>背景画布</h2>
+          <label class="switch-inline" title="背景画布开关"><input id="bg-enabled" type="checkbox" class="switch" aria-label="启用背景画布"></label>
+        </div>
+        <p id="bg-off-note" class="section-note">已关闭：只导出图片和外框，四周透明。打开开关，给图片垫一层带颜色的画布。</p>
+        <div id="bg-body" class="section-body">
+          <div class="seg compact" id="bg-seg">
+            <button type="button" data-value="mesh">弥散</button>
+            <button type="button" data-value="gradient">渐变</button>
+            <button type="button" data-value="solid">纯色</button>
+            <button type="button" data-value="image">图片</button>
+            <button type="button" data-value="blur">模糊</button>
+          </div>
+          <div id="bg-options" class="bg-options"></div>
+          <input id="bg-file" type="file" accept="image/*,.heic,.heif" hidden>
+          <label class="switch-row">
+            <span class="row-label">颗粒质感</span>
+            <input id="noise" type="checkbox" class="switch">
+          </label>
+          <div class="row">
+            <span class="row-label">图案</span>
+            <div class="seg compact" id="pattern-seg">
+              <button type="button" data-value="none">无</button>
+              <button type="button" data-value="dots">圆点</button>
+              <button type="button" data-value="grid">方格</button>
+              <button type="button" data-value="diagonal">斜线</button>
+            </div>
+          </div>
+          <div class="sub-head">画布尺寸</div>
+          <div class="chips" id="ratio-chips">
+            <button type="button" data-value="auto">自适应</button>
+            <button type="button" data-value="1:1">1:1</button>
+            <button type="button" data-value="4:3">4:3</button>
+            <button type="button" data-value="16:9">16:9</button>
+            <button type="button" data-value="3:4">3:4</button>
+            <button type="button" data-value="9:16">9:16</button>
+            <button type="button" data-value="5:2" data-tip="X 文章头图">5:2</button>
+          </div>
+          <label class="slider-row">
+            <span class="row-label" data-tip="图片到画布边缘的距离">留白</span>
+            <input id="padding" type="range" min="0" max="480" step="4">
+            <output id="padding-out"></output>
+          </label>
+        </div>
+      </section>
+
+      <details class="panel-section" id="wm-section">
+        <summary class="section-head"><h2>水印</h2><label class="switch-inline" title="启用水印"><input id="wm-enabled" type="checkbox" class="switch"></label></summary>
+        <input id="wm-text" class="text-input" type="text" placeholder="@你的账号">
+        <div class="chips" id="wm-position">
+          <button type="button" data-value="br">右下</button>
+          <button type="button" data-value="bl">左下</button>
+          <button type="button" data-value="tr">右上</button>
+          <button type="button" data-value="tl">左上</button>
+          <button type="button" data-value="cc">居中</button>
+          <button type="button" data-value="tile">平铺</button>
+        </div>
+        <div id="wm-tile-fields">
+          <label class="slider-row">
+            <span class="row-label">密度</span>
+            <input id="wm-density" type="range" min="1" max="10" step="1">
+            <output id="wm-density-out"></output>
+          </label>
+          <label class="slider-row">
+            <span class="row-label">角度</span>
+            <input id="wm-angle" type="range" min="-90" max="90" step="5">
+            <output id="wm-angle-out"></output>
+          </label>
+        </div>
+        <label class="slider-row">
+          <span class="row-label">大小</span>
+          <input id="wm-size" type="range" min="4" max="30" step="1">
+          <output id="wm-size-out"></output>
+        </label>
+        <label class="slider-row">
+          <span class="row-label">透明</span>
+          <input id="wm-opacity" type="range" min="1" max="100" step="1">
+          <output id="wm-opacity-out"></output>
+        </label>
+        <div class="row">
+          <span class="row-label">颜色</span>
+          <div id="wm-colors" class="swatches"></div>
+        </div>
+      </details>
+    </aside>
+  </div>
+
+  <div id="shortcuts-modal" class="modal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title">
+      <div class="modal-head">
+        <h2 id="shortcuts-title">快捷键</h2>
+        <button class="icon-btn small" type="button" data-close aria-label="关闭"><i data-icon="close" data-size="16"></i></button>
+      </div>
+      <div class="shortcut-grid" id="shortcut-grid"></div>
+    </div>
+  </div>
+
+  <script src="js/icons.js"></script>
+  <script src="js/draw.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

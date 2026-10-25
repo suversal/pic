@@ -1,0 +1,6 @@
+# 内部调研、评审资料，只留在本机
+docs/
+.cross-review/
+
+.DS_Store
+*.log
