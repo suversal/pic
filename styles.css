@@ -154,7 +154,6 @@ kbd {
   background: var(--panel-2);
   border: 1px solid var(--border);
 }
-.history { display: flex; gap: 2px; margin-left: -4px; }
 .topbar-center { display: flex; gap: 2px; }
 .topbar-right { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
 
@@ -196,6 +195,7 @@ kbd {
 }
 .link-btn:hover { text-decoration: underline; }
 .slider-row.disabled { opacity: 0.4; pointer-events: none; }
+.sub-head .link-btn { float: right; font-size: 11px; font-weight: 500; letter-spacing: 0; }
 .sub-head {
   padding-top: 6px;
   color: var(--muted);
@@ -568,6 +568,32 @@ input[type="range"]:hover::-webkit-slider-thumb { transform: scale(1.12); }
 .frame-tile[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
 
 .bg-options { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.patterns { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.pattern-tile {
+  position: relative;
+  aspect-ratio: 1;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--panel-2);
+  box-shadow: inset 0 0 0 1px var(--border);
+  transition: transform 0.15s var(--ease), box-shadow 0.15s;
+}
+.pattern-tile canvas { display: block; width: 100%; height: 100%; }
+.pattern-tile:hover { transform: translateY(-1px); }
+.pattern-tile[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--accent); }
+/* “无”：一条斜线 */
+.pattern-tile[data-value="none"]::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 18%;
+  width: 1.5px;
+  height: 64%;
+  background: var(--muted);
+  transform: translateX(-50%) rotate(45deg);
+}
 .bg-swatch {
   aspect-ratio: 1;
   border-radius: 8px;
@@ -616,6 +642,8 @@ input[type="range"]:hover::-webkit-slider-thumb { transform: scale(1.12); }
 }
 
 .canvas-wrap { position: relative; flex: none; margin: auto; }
+/* 操作结束后画布平移回窗口中间 */
+.canvas-wrap.settling { transition: translate 0.3s var(--ease); }
 canvas#canvas {
   display: block;
   width: 100%;
@@ -741,8 +769,9 @@ canvas#canvas {
   color: var(--text-2);
   transition: background 0.15s, color 0.15s, transform 0.15s var(--ease);
 }
-.tool:hover { background: var(--hover); color: var(--text); }
-.tool:active { transform: scale(0.94); }
+.tool:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.tool:active:not(:disabled) { transform: scale(0.94); }
+.tool:disabled { opacity: 0.35; cursor: default; }
 .tool[aria-pressed="true"] {
   color: #fff;
   background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 85%, white), var(--accent));
@@ -986,7 +1015,7 @@ canvas#canvas {
 .toast-action:hover { background: var(--accent); color: #fff; }
 
 /* 没有图片时工具栏变淡，点了会提示先添加图片 */
-.dock.idle .tool { opacity: 0.4; }
+.dock.idle .tool[data-tool] { opacity: 0.4; }
 .dock.idle .tool[aria-pressed="true"] { background: transparent; color: inherit; box-shadow: none; }
 
 /* 导出中：按钮图标闪烁、不能连点 */

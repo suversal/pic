@@ -15,11 +15,6 @@
         <span class="logo" aria-hidden="true"></span>
         <span class="brand-name">MagicPin</span>
         <span class="badge" title="图片只在本机浏览器里处理，不会上传"><i data-icon="lock" data-size="12"></i>本地处理</span>
-        <span class="divider" aria-hidden="true"></span>
-        <div class="history">
-          <button id="undo" class="icon-btn" type="button" data-tip="撤销 ⌘Z" aria-label="撤销"><i data-icon="undo"></i></button>
-          <button id="redo" class="icon-btn" type="button" data-tip="重做 ⇧⌘Z" aria-label="重做"><i data-icon="redo"></i></button>
-        </div>
       </div>
       <div class="topbar-center">
         <div class="zoom-ctl disabled" id="zoom-ctl">
@@ -177,7 +172,12 @@
       </div>
 
       <div id="props" class="ctxbar" hidden></div>
-      <nav id="tools" class="dock" aria-label="工具"></nav>
+      <nav id="tools" class="dock" aria-label="工具">
+        <span class="sep" id="dock-actions"></span>
+        <button id="undo" class="tool" type="button" data-tip="撤销  ⌘Z" aria-label="撤销"><i data-icon="undo" data-size="19"></i></button>
+        <button id="redo" class="tool" type="button" data-tip="重做  ⇧⌘Z" aria-label="重做"><i data-icon="redo" data-size="19"></i></button>
+        <button id="reset-all" class="tool" type="button" data-tip="还原：回到导入时的样子" aria-label="还原"><i data-icon="reset" data-size="19"></i></button>
+      </nav>
 
       <div id="size-info" class="size-pill"></div>
       <div class="drop-overlay" aria-hidden="true">
@@ -188,19 +188,19 @@
 
     <!-- 右侧：外观 -->
     <aside class="sidebar right">
-      <section class="panel-section">
-        <div class="section-head">
+      <details class="panel-section" id="tpl-section" open>
+        <summary class="section-head">
           <h2>模板</h2>
           <div class="head-actions">
             <button id="shuffle" class="icon-btn small" type="button" data-tip="随机换一个 S" aria-label="随机模板"><i data-icon="shuffle" data-size="15"></i></button>
             <button id="save-style" class="icon-btn small" type="button" data-tip="把当前外观存为模板" aria-label="保存模板"><i data-icon="bookmark" data-size="15"></i></button>
           </div>
-        </div>
+        </summary>
         <div id="gallery" class="gallery"></div>
-      </section>
+      </details>
 
-      <section class="panel-section">
-        <div class="section-head"><h2>图片外框</h2></div>
+      <details class="panel-section" id="frame-section" open>
+        <summary class="section-head"><h2>图片外框</h2></summary>
         <div id="frames" class="frames"></div>
         <label id="title-row" class="field-inline">
           <span class="row-label" id="title-label">窗口标题</span>
@@ -222,13 +222,13 @@
           <output id="shadow-out"></output>
         </label>
         <p id="shadow-note" class="section-note">阴影会投在背景画布上，背景关闭时没有阴影。<button id="shadow-bg-on" class="link-btn" type="button">打开背景画布</button></p>
-      </section>
+      </details>
 
-      <section class="panel-section" id="bg-section">
-        <div class="section-head">
+      <details class="panel-section" id="bg-section" open>
+        <summary class="section-head">
           <h2>背景画布</h2>
           <label class="switch-inline" title="背景画布开关"><input id="bg-enabled" type="checkbox" class="switch" aria-label="启用背景画布"></label>
-        </div>
+        </summary>
         <p id="bg-off-note" class="section-note">已关闭：只导出图片和外框，四周透明。打开开关，给图片垫一层带颜色的画布。</p>
         <div id="bg-body" class="section-body">
           <div class="seg compact" id="bg-seg">
@@ -244,16 +244,14 @@
             <span class="row-label">颗粒质感</span>
             <input id="noise" type="checkbox" class="switch">
           </label>
-          <div class="row">
-            <span class="row-label">图案</span>
-            <div class="seg compact" id="pattern-seg">
-              <button type="button" data-value="none">无</button>
-              <button type="button" data-value="dots">圆点</button>
-              <button type="button" data-value="grid">方格</button>
-              <button type="button" data-value="diagonal">斜线</button>
-            </div>
-          </div>
-          <div class="sub-head">画布尺寸</div>
+          <div class="sub-head">图案</div>
+          <div class="patterns" id="pattern-seg"></div>
+          <label class="slider-row" id="pattern-strength-row">
+            <span class="row-label">深浅</span>
+            <input id="pattern-strength" type="range" min="10" max="100" step="5">
+            <output id="pattern-strength-out"></output>
+          </label>
+          <div class="sub-head">画布尺寸<button id="fit-canvas" class="link-btn" type="button" data-tip="去掉多出来的空白，画布收紧到内容加留白" hidden>贴合内容</button></div>
           <div class="chips" id="ratio-chips">
             <button type="button" data-value="auto">自适应</button>
             <button type="button" data-value="1:1">1:1</button>
@@ -269,7 +267,7 @@
             <output id="padding-out"></output>
           </label>
         </div>
-      </section>
+      </details>
 
       <details class="panel-section" id="wm-section">
         <summary class="section-head"><h2>水印</h2><label class="switch-inline" title="启用水印"><input id="wm-enabled" type="checkbox" class="switch"></label></summary>

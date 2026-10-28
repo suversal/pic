@@ -140,30 +140,38 @@ function frameSpec(kind, ref, border) {
 // 遮挡和标注存在图片的局部坐标里，布局变化时跟着图片走。
 // 排列方向上按顺序紧挨着排；另一个方向按 layout.align 对齐（默认靠上 / 靠左，不自动居中）。
 // 每张图还可以有用户拖出来的 offset，叠加在自动位置上；画布按所有图的实际范围算。
-function computeGeometry(s, sources) {
+// hold：{ width, height, origin }，画布至少这么大、排版原点固定在这个位置，内容超出才往外扩；
+// 用于操作过程中画布不跟着缩，以及固定比例画布锁住尺寸
+function computeGeometry(s, sources, hold = null) {
   const items = s.images.map((im) => {
     const src = orientedSource(sources.get(im.id), im.rotate, im.flip);
-    return { id: im.id, src, crop: im.crop, offset: im.offset, w: src.w - im.crop.l - im.crop.r, h: src.h - im.crop.t - im.crop.b };
+    return { id: im.id, src, crop: im.crop, offset: im.offset, scale: im.scale ?? 1, w: src.w - im.crop.l - im.crop.r, h: src.h - im.crop.t - im.crop.b };
   });
   if (!items.length) return null;
 
   const { mode, fit, gap } = s.layout;
   const align = s.layout.align ?? 'start';
   const horizontal = mode === 'horizontal';
-  // fit 为 none 时每张图保持原始像素尺寸，裁掉多少就小多少；否则按最小或最大边统一宽度（纵向、网格）或高度（横向）
+  // fit 为 none 时每张图按自己的缩放（默认 1，即原始像素尺寸），裁掉多少就小多少；否则按最小或最大边统一宽度（纵向、网格）或高度（横向）
   const uniform = fit !== 'none';
   const pick = (values) => (fit === 'max' ? Math.max(...values) : Math.min(...values));
   const side = uniform ? pick(items.map((it) => (horizontal ? it.h : it.w))) : 0;
   const sizes = items.map((it) => {
-    if (!uniform) return { w: it.w, h: it.h };
+    if (!uniform) return { w: Math.max(1, Math.round(it.w * it.scale)), h: Math.max(1, Math.round(it.h * it.scale)) };
     return horizontal
       ? { w: Math.round(it.w * side / it.h), h: side }
       : { w: side, h: Math.round(it.h * side / it.w) };
   });
 
-  // 外框粗细按原图（未裁剪）的显示尺寸算，裁剪不会让外框跟着变粗变细
-  const frameRef = Math.min(...items.map((it, i) => Math.min(it.src.w, it.src.h) * sizes[i].w / it.w));
+  // 外框粗细、图案疏密、水印大小等都按原图（未裁剪、未手动缩放）的尺寸算：裁剪或缩放一张图，
+  // 不会让其他图的外框、背景图案跟着变。统一宽度属于整体排版，算在里面
+  const baseScale = items.map((it, i) => (uniform ? sizes[i].w / it.w : 1));
+  const frameRef = Math.min(...items.map((it, i) => Math.min(it.src.w, it.src.h) * baseScale[i]));
   let frame = frameSpec(s.style.frame, frameRef, s.style.border);
+  // 手动缩放过的图，外框、圆角、阴影跟着这张图一起等比缩放（k），像把整台手机放大缩小
+  const ks = items.map((it) => (uniform ? 1 : it.scale));
+  // 自定义的边框粗细跟着缩放，至少 1px（0 表示自动粗细，缩得很小时不能变回自动）
+  const specs = ks.map((k) => (k === 1 ? frame : frameSpec(s.style.frame, frameRef * k, s.style.border > 0 ? Math.max(1, Math.round(s.style.border * k)) : 0)));
   const place = (slot, size) => Math.round(align === 'center' ? (slot - size) / 2 : align === 'end' ? slot - size : 0);
 
   // 按给定的每张外框尺寸排版，返回每张的位置（含用户拖出的 offset）和包围盒
@@ -206,8 +214,9 @@ function computeGeometry(s, sources) {
   let layout = gap === 0 && items.length > 1 ? arrange(bare) : null;
   const filled = layout && Math.abs(bare.reduce((sum, o) => sum + o.w * o.h, 0) - layout.iw * layout.ih) <= layout.iw * layout.ih * 0.002;
   const grouped = Boolean(filled);
-  const each = grouped ? { l: 0, r: 0, t: 0, b: 0 } : frame;
-  const outer = grouped ? bare : sizes.map((z) => ({ w: z.w + each.l + each.r, h: z.h + each.t + each.b }));
+  const none = { l: 0, r: 0, t: 0, b: 0 };
+  const eachs = specs.map((spec) => (grouped ? none : spec));
+  const outer = grouped ? bare : sizes.map((z, i) => ({ w: z.w + eachs[i].l + eachs[i].r, h: z.h + eachs[i].t + eachs[i].b }));
   if (!grouped) layout = arrange(outer);
   const { cells, minX, minY, iw, ih } = layout;
   // 内容范围：所有图（含外框）的包围盒；拖到左上方时整体平移回正，origin 记下排版原点在画布上的位置
@@ -222,7 +231,7 @@ function computeGeometry(s, sources) {
     c.y += gt - minY;
   }
 
-  const unit = Math.max(0.2, sizes.reduce((sum, z) => sum + Math.min(z.w, z.h), 0) / sizes.length / 300);
+  const unit = Math.max(0.2, items.reduce((sum, it, i) => sum + Math.min(it.src.w, it.src.h) * baseScale[i], 0) / items.length / 300);
   const st = s.style;
   // 背景关闭时没有画布：不留白、不套比例，图片紧贴边缘
   const bgOn = st.bg !== 'none';
@@ -234,16 +243,41 @@ function computeGeometry(s, sources) {
     if (width / height < ratio) width = Math.round(height * ratio);
     else height = Math.round(width / ratio);
   }
-  const ox = Math.round((width - cw) / 2);
-  const oy = Math.round((height - ch) / 2);
+  let ox = Math.round((width - cw) / 2);
+  let oy = Math.round((height - ch) / 2);
+  if (hold) {
+    // 排版原点放回原位，算出内容在画布上的位置；四周（含留白）超出画布时往那一侧扩
+    let x = hold.origin.x + minX - gl;
+    let y = hold.origin.y + minY - gt;
+    const growL = Math.max(0, padding - x);
+    const growT = Math.max(0, padding - y);
+    x += growL;
+    y += growT;
+    width = Math.max(hold.width + growL, x + cw + padding);
+    height = Math.max(hold.height + growT, y + ch + padding);
+    if (ratio) {
+      // 扩了一边就按比例补另一边，补出来的平均分到两侧
+      if (width / height < ratio) {
+        const w2 = Math.round(height * ratio);
+        x += Math.round((w2 - width) / 2);
+        width = w2;
+      } else if (width / height > ratio) {
+        const h2 = Math.round(width / ratio);
+        y += Math.round((h2 - height) / 2);
+        height = h2;
+      }
+    }
+    ox = x;
+    oy = y;
+  }
 
   const rects = new Map();
   items.forEach((it, i) => {
     const c = cells[i];
     const z = sizes[i];
     const scale = z.w / it.w;
-    const x = c.x + ox + each.l;
-    const y = c.y + oy + each.t;
+    const x = c.x + ox + eachs[i].l;
+    const y = c.y + oy + eachs[i].t;
     rects.set(it.id, {
       id: it.id,
       src: it.src,
@@ -258,6 +292,8 @@ function computeGeometry(s, sources) {
       ox: x - it.crop.l * scale,
       oy: y - it.crop.t * scale,
       frame: { x: c.x + ox, y: c.y + oy, w: outer[i].w, h: outer[i].h },
+      spec: grouped ? null : specs[i],
+      k: grouped ? 1 : ks[i],
     });
   });
   const group = grouped ? { x: ox + gl, y: oy + gt, w: iw, h: ih, frame: { x: ox, y: oy, w: cw, h: ch } } : null;
@@ -273,7 +309,7 @@ function buildBase(geo, st, extras = {}) {
   ctx.imageSmoothingQuality = 'high';
   drawBackground(ctx, geo, st, extras);
   if (geo.group) drawFramedImage(ctx, groupRect(geo), st, geo.frame);
-  else for (const r of geo.rects.values()) drawFramedImage(ctx, r, st, geo.frame);
+  else for (const r of geo.rects.values()) drawFramedImage(ctx, r, st, r.spec ?? geo.frame);
   return canvas;
 }
 
@@ -314,9 +350,9 @@ function drawBackground(ctx, geo, st, extras) {
   }
   if (st.bg === 'none') return;
   if (st.pattern !== 'none' && st.bg !== 'blur' && st.bg !== 'image') {
-    drawPattern(ctx, W, H, st.pattern, backgroundTone(st), geo.unit);
+    drawPattern(ctx, W, H, st.pattern, backgroundTone(st), geo.unit, st.patternStrength ?? 50);
   }
-  if (st.noise) drawNoise(ctx, W, H);
+  if (st.noise) drawNoise(ctx, W, H, geo.unit);
 }
 
 function drawMesh(ctx, W, H, mesh) {
@@ -409,15 +445,17 @@ function drawCover(ctx, src, W, H, blur) {
   ctx.restore();
 }
 
-function drawNoise(ctx, W, H) {
+// 颗粒按图片尺寸放大：配图在 X 上会缩小显示，逐像素的噪点一缩就被平均掉，看不出来
+function drawNoise(ctx, W, H, unit = 2.5) {
   if (!noiseTile) {
+    const rand = seeded(7);
     noiseTile = document.createElement('canvas');
     noiseTile.width = 160;
     noiseTile.height = 160;
     const n = noiseTile.getContext('2d');
     const img = n.createImageData(160, 160);
     for (let i = 0; i < img.data.length; i += 4) {
-      const v = Math.random() * 255;
+      const v = rand() * 255;
       img.data[i] = v;
       img.data[i + 1] = v;
       img.data[i + 2] = v;
@@ -426,50 +464,205 @@ function drawNoise(ctx, W, H) {
     n.putImageData(img, 0, 0);
   }
   ctx.save();
-  ctx.globalAlpha = 0.09;
+  ctx.globalAlpha = 0.2;
   ctx.globalCompositeOperation = 'overlay';
-  ctx.fillStyle = ctx.createPattern(noiseTile, 'repeat');
+  const grain = ctx.createPattern(noiseTile, 'repeat');
+  const g = Math.max(1, unit * 0.8);
+  grain.setTransform(new DOMMatrix().scale(g));
+  ctx.fillStyle = grain;
   ctx.fillRect(0, 0, W, H);
   ctx.restore();
 }
 
 const patternLayer = document.createElement('canvas');
 
-// 图案画在单独的图层上，再用径向渐变让它从中间向四周淡出，边缘不显得生硬
-function drawPattern(ctx, W, H, kind, tone, unit) {
+// 背景图案：[值, 名称]。都是线条或小块，按图片尺寸（unit）缩放疏密
+const PATTERNS = [
+  ['none', '无'], ['dots', '圆点'], ['grid', '方格'], ['diagonal', '斜线'], ['cross', '十字'],
+  ['lines', '横线'], ['waves', '波浪'], ['zigzag', '折线'], ['checker', '棋盘'], ['plaid', '格纹'],
+  ['hex', '蜂窝'], ['triangles', '三角'], ['rings', '同心圆'], ['rays', '放射'], ['confetti', '散点'],
+];
+
+// 固定种子的随机数：散点每次画出来都一样，画面和导出一致
+function seeded(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// 图案画在单独的图层上，再用径向渐变让它从中间向四周淡出，边缘不显得生硬。
+// strength：深浅，10～100，50 是默认
+function drawPattern(ctx, W, H, kind, tone, unit, strength = 50) {
   const light = contrastColor(tone) === '#ffffff';
-  const color = light ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.07)';
-  const step = Math.max(12, Math.round(unit * (kind === 'grid' ? 16 : 10)));
+  const k = strength / 50;
+  const ink = (a) => (light ? `rgba(255, 255, 255, ${a * k})` : `rgba(0, 0, 0, ${a * k})`);
+  const line = ink(light ? 0.2 : 0.17);
+  const fill = ink(light ? 0.1 : 0.08);
+  // 配图在 X 上通常缩小显示，线太细、间距太密会糊成一片，所以都按偏粗偏疏来画
+  const step = Math.max(14, Math.round(unit * 14));
+  const cx = W / 2;
+  const cy = H / 2;
   patternLayer.width = W;
   patternLayer.height = H;
   const p = patternLayer.getContext('2d');
-  p.fillStyle = color;
-  p.strokeStyle = color;
-  p.lineWidth = Math.max(1, unit * 0.35);
+  p.fillStyle = line;
+  p.strokeStyle = line;
+  p.lineWidth = Math.max(1, unit * 0.6);
+  p.lineJoin = 'round';
+  p.lineCap = 'round';
   p.beginPath();
+  // 从中心对齐的起点，左右上下对称
+  const from = (c, d) => (c % d) - d;
   if (kind === 'dots') {
-    const r = Math.max(1, unit * 0.9);
-    for (let y = step / 2; y < H; y += step) {
-      for (let x = step / 2; x < W; x += step) {
+    const r = Math.max(1, unit * 1.3);
+    for (let y = from(cy, step); y < H + step; y += step) {
+      for (let x = from(cx, step); x < W + step; x += step) {
         p.moveTo(x + r, y);
         p.arc(x, y, r, 0, Math.PI * 2);
       }
     }
     p.fill();
   } else if (kind === 'grid') {
-    // 网格从中心对齐，左右上下对称
-    const ox = (W / 2) % step;
-    const oy = (H / 2) % step;
-    for (let x = ox; x < W; x += step) { p.moveTo(x, 0); p.lineTo(x, H); }
-    for (let y = oy; y < H; y += step) { p.moveTo(0, y); p.lineTo(W, y); }
+    const d = step * 1.6;
+    for (let x = from(cx, d); x < W; x += d) { p.moveTo(x, 0); p.lineTo(x, H); }
+    for (let y = from(cy, d); y < H; y += d) { p.moveTo(0, y); p.lineTo(W, y); }
     p.stroke();
   } else if (kind === 'diagonal') {
     for (let d = -H; d < W; d += step) { p.moveTo(d, H); p.lineTo(d + H, 0); }
     p.stroke();
+  } else if (kind === 'cross') {
+    const d = step * 1.6;
+    const arm = d * 0.14;
+    for (let y = from(cy, d); y < H + d; y += d) {
+      for (let x = from(cx, d); x < W + d; x += d) {
+        p.moveTo(x - arm, y); p.lineTo(x + arm, y);
+        p.moveTo(x, y - arm); p.lineTo(x, y + arm);
+      }
+    }
+    p.stroke();
+  } else if (kind === 'lines') {
+    const d = step * 0.9;
+    for (let y = from(cy, d); y < H; y += d) { p.moveTo(0, y); p.lineTo(W, y); }
+    p.stroke();
+  } else if (kind === 'waves') {
+    const d = step * 1.1;
+    const len = step * 2.4;
+    const amp = step * 0.22;
+    for (let y = from(cy, d); y < H + d; y += d) {
+      p.moveTo(-len, y);
+      for (let x = -len; x < W + len; x += len) {
+        p.bezierCurveTo(x + len * 0.25, y - amp * 2, x + len * 0.25, y - amp * 2, x + len * 0.5, y);
+        p.bezierCurveTo(x + len * 0.75, y + amp * 2, x + len * 0.75, y + amp * 2, x + len, y);
+      }
+    }
+    p.stroke();
+  } else if (kind === 'zigzag') {
+    const d = step * 1.1;
+    const seg = step * 0.6;
+    const amp = step * 0.3;
+    for (let y = from(cy, d); y < H + d; y += d) {
+      p.moveTo(from(cx, seg * 2), y);
+      let up = true;
+      for (let x = from(cx, seg * 2) + seg; x < W + seg; x += seg) {
+        p.lineTo(x, y + (up ? -amp : 0));
+        up = !up;
+      }
+    }
+    p.stroke();
+  } else if (kind === 'checker') {
+    p.fillStyle = fill;
+    const d = step * 1.4;
+    const x0 = from(cx, d * 2);
+    const y0 = from(cy, d * 2);
+    for (let y = y0, row = 0; y < H; y += d, row++) {
+      for (let x = x0 + (row % 2) * d; x < W; x += d * 2) p.rect(x, y, d, d);
+    }
+    p.fill();
+  } else if (kind === 'plaid') {
+    // 粗细两组横竖条纹叠在一起，交叉处自然更深
+    p.fillStyle = fill;
+    const d = step * 4;
+    const wide = d * 0.32;
+    const thin = Math.max(1, unit * 0.6);
+    for (let x = from(cx, d); x < W; x += d) { p.fillRect(x - wide / 2, 0, wide, H); p.fillRect(x + d / 2 - thin / 2, 0, thin, H); }
+    for (let y = from(cy, d); y < H; y += d) { p.fillRect(0, y - wide / 2, W, wide); p.fillRect(0, y + d / 2 - thin / 2, W, thin); }
+  } else if (kind === 'hex') {
+    const r = step * 0.95;
+    const hw = Math.sqrt(3) * r;
+    for (let row = 0, y = from(cy, r * 3); y < H + r * 2; y += r * 1.5, row++) {
+      for (let x = from(cx, hw) + (row % 2 ? hw / 2 : 0); x < W + hw; x += hw) {
+        for (let i = 0; i <= 6; i++) {
+          const a = Math.PI / 6 + (i * Math.PI) / 3;
+          const px = x + r * Math.cos(a);
+          const py = y + r * Math.sin(a);
+          if (i === 0) p.moveTo(px, py);
+          else p.lineTo(px, py);
+        }
+      }
+    }
+    p.stroke();
+  } else if (kind === 'triangles') {
+    const d = step * 2;
+    const h = d * Math.sqrt(3) / 2;
+    for (let y = from(cy, h * 2); y < H + h; y += h) { p.moveTo(0, y); p.lineTo(W, y); }
+    // 两组 60° 斜线，和横线交成三角形网格
+    const span = H / Math.tan(Math.PI / 3);
+    for (let x = from(cx, d) - span - d; x < W + span + d; x += d) {
+      p.moveTo(x, 0); p.lineTo(x + span, H);
+      p.moveTo(x, 0); p.lineTo(x - span, H);
+    }
+    p.stroke();
+  } else if (kind === 'rings') {
+    const d = step * 1.3;
+    const max = Math.hypot(W, H) / 2;
+    for (let r = d; r < max; r += d) {
+      p.moveTo(cx + r, cy);
+      p.arc(cx, cy, r, 0, Math.PI * 2);
+    }
+    p.stroke();
+  } else if (kind === 'rays') {
+    // 从中心发散的扇形，隔一条填一条
+    p.fillStyle = fill;
+    const n = 48;
+    const R = Math.hypot(W, H);
+    for (let i = 0; i < n; i += 2) {
+      const a0 = (i / n) * Math.PI * 2;
+      const a1 = ((i + 1) / n) * Math.PI * 2;
+      p.moveTo(cx, cy);
+      p.lineTo(cx + R * Math.cos(a0), cy + R * Math.sin(a0));
+      p.lineTo(cx + R * Math.cos(a1), cy + R * Math.sin(a1));
+      p.closePath();
+    }
+    p.fill();
+  } else if (kind === 'confetti') {
+    // 散落的小圆点和短线，大小、角度随机但固定
+    const rand = seeded(20261029);
+    const count = Math.round((W * H) / (step * step * 2.2));
+    for (let i = 0; i < count; i++) {
+      const x = rand() * W;
+      const y = rand() * H;
+      const size = (0.9 + rand() * 1.4) * unit;
+      if (rand() < 0.5) {
+        p.moveTo(x + size, y);
+        p.arc(x, y, size, 0, Math.PI * 2);
+      } else {
+        const a = rand() * Math.PI;
+        const len = size * 2.4;
+        p.moveTo(x - Math.cos(a) * len, y - Math.sin(a) * len);
+        p.lineTo(x + Math.cos(a) * len, y + Math.sin(a) * len);
+      }
+    }
+    p.fill();
+    p.stroke();
   }
-  const fade = p.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.3, W / 2, H / 2, Math.hypot(W, H) / 2);
+  const fade = p.createRadialGradient(cx, cy, Math.min(W, H) * 0.3, cx, cy, Math.hypot(W, H) / 2);
   fade.addColorStop(0, 'rgba(0, 0, 0, 1)');
-  fade.addColorStop(1, 'rgba(0, 0, 0, 0.15)');
+  // 留白都在四周，淡出太多等于看不见，边缘保留六成
+  fade.addColorStop(1, 'rgba(0, 0, 0, 0.6)');
   p.globalCompositeOperation = 'destination-in';
   p.fillStyle = fade;
   p.fillRect(0, 0, W, H);
@@ -510,8 +703,11 @@ function drawImageClipped(ctx, r, radius) {
 
 function drawFramedImage(ctx, r, st, frame) {
   const f = r.frame;
+  // 手动缩放过的图，圆角和阴影跟着等比缩放
+  const k = r.k ?? 1;
+  const radius = st.radius * k;
   // 阴影投在背景画布上；背景关闭时四周透明，没有地方投影
-  const shadow = st.bg === 'none' ? 0 : st.shadow;
+  const shadow = st.bg === 'none' ? 0 : st.shadow * k;
   switch (frame.family) {
     case 'iphone':
       castShadow(ctx, f.x, f.y, f.w, f.h, frame.radius, shadow);
@@ -526,7 +722,7 @@ function drawFramedImage(ctx, r, st, frame) {
     case 'white':
     case 'black': {
       // 内外同心：图片圆角加上边框粗细就是外框圆角，圆角为 0 时内外都是直角
-      const inner = Math.min(st.radius, r.w / 2, r.h / 2);
+      const inner = Math.min(radius, r.w / 2, r.h / 2);
       const outer = inner > 0 ? inner + frame.pad : 0;
       castShadow(ctx, f.x, f.y, f.w, f.h, outer, shadow);
       ctx.beginPath();
@@ -567,15 +763,15 @@ function drawFramedImage(ctx, r, st, frame) {
       return;
     }
     default: {
-      const radius = Math.min(st.radius, r.w / 2, r.h / 2);
-      castShadow(ctx, r.x, r.y, r.w, r.h, radius, shadow);
-      drawImageClipped(ctx, r, radius);
+      const clip = Math.min(radius, r.w / 2, r.h / 2);
+      castShadow(ctx, r.x, r.y, r.w, r.h, clip, shadow);
+      drawImageClipped(ctx, r, clip);
       // 有背景时给图片描一道极细的边：深色背景上像玻璃的高光，浅色背景上收住白色截图的边缘
       if (st.bg !== 'none' && st.bg !== 'blur' && st.bg !== 'image') {
         ctx.lineWidth = Math.max(1, Math.round(r.w / 900));
         ctx.strokeStyle = luminance(backgroundTone(st)) < 0.4 ? 'rgba(255, 255, 255, 0.14)' : 'rgba(0, 0, 0, 0.07)';
         ctx.beginPath();
-        ctx.roundRect(r.x + ctx.lineWidth / 2, r.y + ctx.lineWidth / 2, r.w - ctx.lineWidth, r.h - ctx.lineWidth, radius);
+        ctx.roundRect(r.x + ctx.lineWidth / 2, r.y + ctx.lineWidth / 2, r.w - ctx.lineWidth, r.h - ctx.lineWidth, clip);
         ctx.stroke();
       }
     }

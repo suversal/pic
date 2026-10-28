@@ -93,14 +93,14 @@ const els = {
   bgSeg: $('bg-seg'), bgOptions: $('bg-options'), bgFile: $('bg-file'), noise: $('noise'),
   ratioChips: $('ratio-chips'), padding: $('padding'), paddingOut: $('padding-out'),
   radiusRow: $('radius-row'), radius: $('radius'), radiusOut: $('radius-out'), shadow: $('shadow'), shadowOut: $('shadow-out'),
-  patternSeg: $('pattern-seg'),
+  patternSeg: $('pattern-seg'), patternStrength: $('pattern-strength'), patternStrengthOut: $('pattern-strength-out'), patternStrengthRow: $('pattern-strength-row'),
   shadowRow: $('shadow-row'), shadowNote: $('shadow-note'), shadowBgOn: $('shadow-bg-on'),
   borderRow: $('border-row'), border: $('border'), borderOut: $('border-out'),
-  wmSection: $('wm-section'), wmEnabled: $('wm-enabled'), wmText: $('wm-text'), wmPosition: $('wm-position'),
+  fitCanvas: $('fit-canvas'), wmSection: $('wm-section'), bgSection: $('bg-section'), rightSections: document.querySelectorAll('.sidebar.right > details.panel-section'), wmEnabled: $('wm-enabled'), wmText: $('wm-text'), wmPosition: $('wm-position'),
   wmTileFields: $('wm-tile-fields'), wmDensity: $('wm-density'), wmDensityOut: $('wm-density-out'),
   wmAngle: $('wm-angle'), wmAngleOut: $('wm-angle-out'), wmSize: $('wm-size'), wmSizeOut: $('wm-size-out'),
   wmOpacity: $('wm-opacity'), wmOpacityOut: $('wm-opacity-out'), wmColors: $('wm-colors'),
-  tools: $('tools'), undo: $('undo'), redo: $('redo'),
+  tools: $('tools'), dockActions: $('dock-actions'), undo: $('undo'), redo: $('redo'), resetAll: $('reset-all'),
   zoomOut: $('zoom-out'), zoomIn: $('zoom-in'), zoomLabel: $('zoom-label'), zoomFit: $('zoom-fit'),
   zoomCtl: $('zoom-ctl'), zoomSlider: $('zoom-slider'), zoomMenu: $('zoom-menu'),
   copy: $('copy'), exportToggle: $('export-toggle'), exportPop: $('export-pop'), exportFormat: $('export-format'),
@@ -122,7 +122,7 @@ let state = {
   layout: { mode: 'vertical', columns: 2, fit: 'none', align: 'start', gap: 0 },
   style: {
     frame: 'none', bg: 'none', bgLast: 'mesh', color: '#ffffff', gradient: 0, mesh: 0, bgImage: null, noise: false,
-    pattern: 'none', ratio: 'auto', padding: 0, border: 0, radius: 0, shadow: 0, title: '',
+    pattern: 'none', patternStrength: 50, ratio: 'auto', padding: 0, border: 0, radius: 0, shadow: 0, title: '',
   },
   watermark: { enabled: false, text: '', position: 'br', size: 9, opacity: 0.7, color: 'auto', density: 5, angle: -30 },
   objects: [],
@@ -146,7 +146,8 @@ const defaults = {
   sticker: { char: '👉', level: 1 },
 };
 
-const prefs = { export: { format: 'image/png', scale: 1, x: true, mode: 'all' }, userPresets: [], theme: 'system' };
+// sections：右栏各块的展开状态，按区块 id 记
+const prefs = { export: { format: 'image/png', scale: 1, x: true, mode: 'all' }, userPresets: [], theme: 'system', sections: {} };
 
 // shift：调整截取范围时画布的临时平移，让没裁掉的部分在屏幕上原地不动
 const view = { zoom: 1, fit: true, shift: { x: 0, y: 0 } };
@@ -161,6 +162,10 @@ let hoverImage = null;
 let listHoverImage = null;
 let drag = null;
 let editing = null;
+// 选择工具下点中的图片：显示四角控制点，拖角等比缩放
+let imageSel = null;
+// 画框类工具还没按下时，鼠标所在点能对齐的参考线，先对准再按
+let hoverGuides = [];
 let geo = null;
 let base = null;
 let geoKey = '';
@@ -198,6 +203,7 @@ function loadPrefs() {
   if (saved.export) Object.assign(prefs.export, saved.export);
   if (Array.isArray(saved.userPresets)) prefs.userPresets = saved.userPresets;
   if (['system', 'light', 'dark'].includes(saved.theme)) prefs.theme = saved.theme;
+  if (saved.sections && typeof saved.sections === 'object') prefs.sections = saved.sections;
 }
 
 const THEMES = { system: ['contrast', '外观：跟随系统'], light: ['sun', '外观：浅色'], dark: ['moon', '外观：深色'] };
@@ -224,7 +230,7 @@ function savePrefs() {
     try {
       const { bgImage, ...style } = state.style;
       localStorage.setItem(PREFS_KEY, JSON.stringify({
-        style, layout: state.layout, watermark: state.watermark, defaults, export: prefs.export, userPresets: prefs.userPresets, theme: prefs.theme,
+        style, layout: state.layout, watermark: state.watermark, defaults, export: prefs.export, userPresets: prefs.userPresets, theme: prefs.theme, sections: prefs.sections,
       }));
     } catch {
       // 隐私模式或存储被禁用时不记忆偏好，不影响使用
@@ -286,7 +292,11 @@ function refresh() {
   updateGeometry();
   if (selectedId != null && !findObject(selectedId)) selectedId = null;
   if (multi.length) setSelection(multi);
-  if (cropEdit && !state.images.some((im) => im.id === cropEdit.id)) cropEdit = null;
+  if (cropEdit && !state.images.some((im) => im.id === cropEdit.id)) {
+    cropEdit = null;
+    canvasHold = null;
+  }
+  if (imageSel != null && !state.images.some((im) => im.id === imageSel)) imageSel = null;
   renderList();
   syncPanels();
   renderProps();
@@ -297,10 +307,13 @@ function refresh() {
 }
 
 function updateGeometry() {
-  const key = JSON.stringify([state.images, state.layout, state.style]);
+  // 锁定的画布尺寸只在排版设置不变时有效；换了排列、留白、比例、外框或增删图片就作废
+  if (state.canvasLock && !canvasLock(state)) delete state.canvasLock;
+  const hold = canvasHold ?? canvasLock(state);
+  const key = JSON.stringify([state.images, state.layout, state.style, hold]);
   if (key === geoKey) return;
   geoKey = key;
-  geo = computeGeometry(state, sources);
+  geo = computeGeometry(state, sources, hold);
   base = geo ? buildBase(geo, state.style, { bgImage: bgImageSource() }) : null;
   // 调整截取范围时不自动适应窗口，否则图片裁小后会被放大显示
   if (view.fit && !cropEdit && !holdView) fitZoom();
@@ -562,7 +575,8 @@ function render() {
 }
 
 // ---------- 对齐吸附 ----------
-// 拖动对象时，让它的左/中/右、上/中/下贴到画布中线、图片边缘与中线、其他对象的边缘与中线；按住 ⌥ 临时关闭
+// 拖动对象时，让它的左/中/右、上/中/下贴到画布中线、图片边缘与中线、其他对象的边缘与中线；
+// 画新的框、拖控制点调大小时，鼠标所在的点也一样吸附。按住 ⌥ 临时关闭
 
 const SNAP_PX = 6;
 
@@ -605,6 +619,24 @@ function snapMove(b0, dx, dy, exclude) {
   return { dx: sx ? sx.d : 0, dy: sy ? sy.d : 0, guides };
 }
 
+// 本身没有边线的框：拖动时要描边才看得出范围
+const BOX_TYPES = new Set(['mask', 'highlight', 'spotlight']);
+
+// 拖动画出来的工具：起点、终点都吸附
+const SNAP_TOOLS = new Set(['mask', 'highlight', 'spotlight', 'rect', 'ellipse', 'arrow', 'line']);
+
+// 单个点吸附：画框的起点和终点、拖动的控制点
+function snapPoint(p, exclude = new Set()) {
+  const { xs, ys } = snapTargets(exclude);
+  const tol = SNAP_PX / view.zoom;
+  const sx = snapAxis([p.x], xs, tol);
+  const sy = snapAxis([p.y], ys, tol);
+  const guides = [];
+  if (sx) guides.push({ x: sx.at });
+  if (sy) guides.push({ y: sy.at });
+  return { p: { x: p.x + (sx ? sx.d : 0), y: p.y + (sy ? sy.d : 0) }, guides };
+}
+
 // 拖图片时吸附到其他图片的边缘和中线。坐标都相对排版原点，画布尺寸变化时也不受影响
 function imageSnapInfo(id) {
   const rel = (b) => ({ x: b.x - geo.origin.x, y: b.y - geo.origin.y, w: b.w, h: b.h });
@@ -617,6 +649,107 @@ function imageSnapInfo(id) {
     ys.push(b.y, b.y + b.h / 2, b.y + b.h);
   }
   return { box: rel(geo.rects.get(id).frame), targets: { xs, ys } };
+}
+
+// ---------- 缩放图片 ----------
+// 拖四个角等比缩放：往外拖放大、往里拖缩小。只有这张图在变：对角固定不动，其他图也不被挤开
+// （差值记进各自的 offset，放大后可以叠在别的图上）。吸附到原始大小和其他图片的宽高，按住 ⌥ 不吸附
+
+const IMAGE_MIN = 24;
+
+function imageBox(id) {
+  const r = geo?.rects.get(id);
+  if (!r) return null;
+  return geo.group ? { x: r.x, y: r.y, w: r.w, h: r.h } : r.frame;
+}
+
+function imageHandles(id) {
+  const b = imageBox(id);
+  if (!b) return [];
+  return [['nw', b.x, b.y], ['ne', b.x + b.w, b.y], ['sw', b.x, b.y + b.h], ['se', b.x + b.w, b.y + b.h]].map(([name, x, y]) => ({ name, x, y }));
+}
+
+function imageHandleAt(p) {
+  if (imageSel == null || cropEdit || !p) return null;
+  const tol = 8 / view.zoom;
+  const h = imageHandles(imageSel).find((q) => Math.hypot(q.x - p.x, q.y - p.y) <= tol);
+  return h ? h.name : null;
+}
+
+// 统一宽度开着时先按当前显示的大小写进每张图，再关掉，缩放从眼前的样子开始
+function unfreezeFit(s) {
+  if (s.layout.fit === 'none') return false;
+  for (const im of s.images) im.scale = geo.rects.get(im.id).s;
+  s.layout.fit = 'none';
+  return true;
+}
+
+function startImageScale(id, corner, e) {
+  const r = geo.rects.get(id);
+  drag = { kind: 'scale', id, corner, start: clientPoint(e), w0: r.w, h0: r.h, cw: r.cw, fitOff: false, moved: false, snap: null, pins: imagePins(id, corner) };
+  holdView = true;
+  holdCanvas();
+  requestRender();
+}
+
+// 每张图要固定的点（相对排版原点）：缩放的那张是拖动角的对角，其他图是左上角
+function imagePins(id, corner) {
+  const pins = new Map();
+  for (const r of geo.rects.values()) {
+    const x = r.id === id && !corner.includes('e') ? r.x + r.w : r.x;
+    const y = r.id === id && !corner.includes('s') ? r.y + r.h : r.y;
+    pins.set(r.id, { x: x - geo.origin.x, y: y - geo.origin.y });
+  }
+  return pins;
+}
+
+function scaleImage(d, c, free) {
+  const sx = d.corner.includes('e') ? 1 : -1;
+  const sy = d.corner.includes('s') ? 1 : -1;
+  const dx = (c.x - d.start.x) * sx;
+  const dy = (c.y - d.start.y) * sy;
+  if (!d.moved && Math.hypot(dx, dy) * view.zoom < 2) return;
+  if (!d.moved) {
+    // 真正拖起来才关统一宽度，只点一下控制点不改任何设置
+    d.moved = true;
+    if (state.layout.fit !== 'none') live((s) => { d.fitOff = unfreezeFit(s); });
+  }
+  // 鼠标位移投影到对角线上，斜着拖、横着拖、竖着拖都跟手
+  const k = 1 + (dx * d.w0 + dy * d.h0) / (d.w0 * d.w0 + d.h0 * d.h0);
+  let w = Math.max(IMAGE_MIN, d.w0 * k);
+  d.snap = null;
+  if (!free) {
+    const tol = SNAP_PX / view.zoom;
+    const aspect = d.w0 / d.h0;
+    const targets = [[d.cw, null]];
+    for (const r of geo.rects.values()) {
+      if (r.id === d.id) continue;
+      targets.push([r.w, '和其他图同宽'], [r.h * aspect, '和其他图同高']);
+    }
+    let best = tol;
+    for (const [tw, label] of targets) {
+      if (Math.abs(tw - w) < best) {
+        best = Math.abs(tw - w);
+        w = tw;
+        d.snap = label;
+      }
+    }
+  }
+  const screen = originOnScreen();
+  live((s) => { s.images.find((x) => x.id === d.id).scale = w / d.cw; });
+  // 排版重新算过后，把每张图挪回固定点
+  const now = imagePins(d.id, d.corner);
+  live((s) => {
+    for (const im of s.images) {
+      const want = d.pins.get(im.id);
+      const got = now.get(im.id);
+      if (!want || !got) continue;
+      const dx = Math.round(want.x - got.x);
+      const dy = Math.round(want.y - got.y);
+      if (dx || dy) im.offset = { x: (im.offset?.x ?? 0) + dx, y: (im.offset?.y ?? 0) + dy };
+    }
+  });
+  keepOrigin(screen);
 }
 
 function moveImage(d, c, free) {
@@ -646,6 +779,40 @@ function moveImage(d, c, free) {
   keepOrigin(screen);
 }
 
+function drawHandle(ctx, x, y, px) {
+  const hs = 9 * px;
+  ctx.beginPath();
+  ctx.roundRect(x - hs / 2, y - hs / 2, hs, hs, 2.5 * px);
+  ctx.fillStyle = '#ffffff';
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.25)';
+  ctx.shadowBlur = 3 * px;
+  ctx.fill();
+  ctx.shadowColor = 'transparent';
+  ctx.stroke();
+}
+
+function drawScaleLabel(ctx, d, px) {
+  const r = geo.rects.get(d.id);
+  const h = imageHandles(d.id).find((q) => q.name === d.corner);
+  if (!r || !h) return;
+  const pct = Math.round(r.s * 100);
+  const text = [`${pct}%`, d.snap, pct > 100 ? '放大后可能变糊' : null].filter(Boolean).join(' · ');
+  ctx.save();
+  ctx.font = `500 ${12 * px}px ${FONT_STACK}`;
+  const w = ctx.measureText(text).width + 16 * px;
+  const hgt = 22 * px;
+  const x = h.x + (d.corner.includes('e') ? 10 * px : -10 * px - w);
+  const y = h.y + (d.corner.includes('s') ? 10 * px : -10 * px - hgt);
+  ctx.fillStyle = pct > 100 ? '#b45309' : 'rgba(17, 17, 20, 0.86)';
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, hgt, 6 * px);
+  ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, x + 8 * px, y + hgt / 2);
+  ctx.restore();
+}
+
 function accentColor() {
   return getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#5b5bf0';
 }
@@ -658,14 +825,31 @@ function drawOverlay(objs) {
   ctx.lineWidth = 1.5 * px;
 
   const imageGuides = drag?.kind === 'image' && drag.moved;
-  if (((drag?.kind === 'move' || drag?.kind === 'moveMulti') && drag.cur || imageGuides) && drag.guides?.length) {
+  // 画遮挡、高亮、聚光时描出框的四条边：模糊、马赛克盖在纯色区域上几乎看不出范围
+  const boxDrag = (drag?.kind === 'create' || drag?.kind === 'move' || drag?.kind === 'resize') && drag.cur;
+  if (boxDrag && BOX_TYPES.has(drag.cur.type)) {
+    const c = drag.cur;
+    ctx.save();
+    ctx.setLineDash([]);
+    ctx.lineWidth = 1.5 * px;
+    ctx.strokeStyle = '#ffffff';
+    ctx.strokeRect(c.x, c.y, c.w, c.h);
+    ctx.setLineDash([5 * px, 4 * px]);
+    ctx.strokeStyle = accent;
+    ctx.strokeRect(c.x, c.y, c.w, c.h);
+    ctx.restore();
+  }
+
+  const objectGuides = ['move', 'moveMulti', 'create', 'resize'].includes(drag?.kind) && drag.cur;
+  const guideList = (objectGuides || imageGuides) ? drag.guides : !drag ? hoverGuides : null;
+  if (guideList?.length) {
     const gx = imageGuides ? geo.origin.x : 0;
     const gy = imageGuides ? geo.origin.y : 0;
     ctx.save();
     ctx.setLineDash([]);
     ctx.lineWidth = 1 * px;
     ctx.strokeStyle = '#ff3b8d';
-    for (const g of drag.guides) {
+    for (const g of guideList) {
       ctx.beginPath();
       if (g.x != null) {
         ctx.moveTo(g.x + gx, 0);
@@ -710,8 +894,9 @@ function drawOverlay(objs) {
     const f = listRect.frame;
     // 合成一整张时，单张只是其中一段：沿这段内侧描直角框，不往外扩到相邻的图上
     const pad = geo.group ? -1.25 * px : 5 * px;
-    const inner = Math.min(state.style.radius, listRect.w / 2);
-    const radius = geo.group ? 0 : (geo.frame.radius ?? (inner > 0 ? inner + (geo.frame.pad ?? 0) : 0)) + pad;
+    const spec = listRect.spec ?? geo.frame;
+    const inner = Math.min(state.style.radius * (listRect.k ?? 1), listRect.w / 2);
+    const radius = geo.group ? 0 : (spec.radius ?? (inner > 0 ? inner + (spec.pad ?? 0) : 0)) + pad;
     ctx.setLineDash([]);
     ctx.lineWidth = 2.5 * px;
     ctx.strokeStyle = accent;
@@ -730,6 +915,19 @@ function drawOverlay(objs) {
     ctx.globalAlpha = 1;
     ctx.strokeStyle = accent;
     ctx.strokeRect(r.x, r.y, r.w, r.h);
+  }
+
+  // 选中的图片：描边加四角控制点；缩放时在拖动的角旁边显示比例
+  if (tool === 'select' && imageSel != null && !cropEdit && !(drag?.kind === 'image' && drag.moved)) {
+    const b = imageBox(imageSel);
+    if (b) {
+      ctx.setLineDash([]);
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = 1.5 * px;
+      ctx.strokeRect(b.x, b.y, b.w, b.h);
+      for (const h of imageHandles(imageSel)) drawHandle(ctx, h.x, h.y, px);
+    }
+    if (drag?.kind === 'scale' && drag.moved) drawScaleLabel(ctx, drag, px);
   }
 
   const sel = selectedId != null && objs.find((o) => o.id === selectedId);
@@ -942,6 +1140,12 @@ els.canvas.addEventListener('pointerdown', (e) => {
     return;
   }
 
+  const corner = tool === 'select' && imageHandleAt(p);
+  if (corner) {
+    startImageScale(imageSel, corner, e);
+    return;
+  }
+
   const handle = handleAt(p);
   if (handle) {
     drag = { kind: 'resize', id: selectedId, handle, orig: toCanvasObject(geo, findObject(selectedId)), cur: null };
@@ -949,6 +1153,7 @@ els.canvas.addEventListener('pointerdown', (e) => {
   }
 
   const hit = tool === 'pen' ? null : hitTest(p, tool === 'select', tool === 'select' ? null : tool);
+  if (hit) imageSel = null;
   if (hit && e.shiftKey) {
     // ⇧ 点击：加入或移出选择
     const ids = selectionIds();
@@ -964,11 +1169,13 @@ els.canvas.addEventListener('pointerdown', (e) => {
     const base = e.shiftKey ? selectionIds() : [];
     setSelection(base);
     const imageId = tool === 'select' && !e.shiftKey ? anchorAt(geo, p) : null;
+    imageSel = imageId;
     if (imageId != null) {
       // 按住图片拖动：移动这张图，位置由用户决定
       const im = state.images.find((x) => x.id === imageId);
       drag = { kind: 'image', id: imageId, start: clientPoint(e), orig: { x: im.offset?.x ?? 0, y: im.offset?.y ?? 0 }, moved: false, guides: [], ...imageSnapInfo(imageId) };
       holdView = true;
+      holdCanvas();
     } else if (tool === 'select') {
       // 空白处拖动：框选；按住 ⇧ 在原有选择上追加
       drag = { kind: 'marquee', start: p, base, rect: null };
@@ -978,7 +1185,10 @@ els.canvas.addEventListener('pointerdown', (e) => {
       const objs = addObject(newObject(tool, p, p));
       selectedId = objs[0].id;
     } else {
-      drag = { kind: 'create', start: p, cur: newObject(tool, p, p) };
+      const snap = SNAP_TOOLS.has(tool) && !e.altKey ? snapPoint(p) : { p, guides: [] };
+      // 起点对齐的参考线整个拖动过程都保留，免得松开前看不出起点有没有对齐
+      drag = { kind: 'create', start: snap.p, cur: newObject(tool, snap.p, snap.p), startGuides: snap.guides, guides: snap.guides };
+      hoverGuides = [];
     }
   }
   renderProps();
@@ -988,7 +1198,7 @@ els.canvas.addEventListener('pointerdown', (e) => {
 els.canvas.addEventListener('pointermove', (e) => {
   const p = toCanvasPoint(e);
   if (!drag) {
-    updateCursor(p);
+    updateCursor(p, e.altKey);
     return;
   }
   if (drag.kind === 'pan') {
@@ -1009,6 +1219,10 @@ els.canvas.addEventListener('pointermove', (e) => {
     moveImage(drag, clientPoint(e), e.altKey);
     return;
   }
+  if (drag.kind === 'scale') {
+    scaleImage(drag, clientPoint(e), e.altKey);
+    return;
+  }
   if (drag.kind === 'marquee') {
     drag.rect = rectFromPoints(drag.start, p);
     const hits = state.objects.filter((o) => rectsOverlap(objectBounds(toCanvasObject(geo, o)), drag.rect)).map((o) => o.id);
@@ -1025,7 +1239,9 @@ els.canvas.addEventListener('pointermove', (e) => {
     if (drag.kind === 'move') drag.cur = moveObject(drag.orig, dx + snap.dx, dy + snap.dy);
     else drag.cur = new Map([...drag.origs].map(([id, o]) => [id, moveObject(o, dx + snap.dx, dy + snap.dy)]));
   } else if (drag.kind === 'resize') {
-    drag.cur = resizeObject(drag.orig, drag.handle, p);
+    const snap = e.altKey ? { p, guides: [] } : snapPoint(p, new Set([drag.id]));
+    drag.guides = snap.guides;
+    drag.cur = resizeObject(drag.orig, drag.handle, snap.p);
   } else if (drag.cur.type === 'pen') {
     drag.cur.points.push([p.x, p.y]);
   } else {
@@ -1042,6 +1258,12 @@ els.canvas.addEventListener('pointermove', (e) => {
         const side = Math.max(Math.abs(dx), Math.abs(dy));
         q = { x: drag.start.x + Math.sign(dx || 1) * side, y: drag.start.y + Math.sign(dy || 1) * side };
       }
+    }
+    drag.guides = drag.startGuides ?? [];
+    if (!e.shiftKey && !e.altKey) {
+      const snap = snapPoint(q);
+      q = snap.p;
+      drag.guides = [...drag.guides, ...snap.guides];
     }
     drag.cur = newObject(tool, drag.start, q);
   }
@@ -1067,9 +1289,12 @@ els.canvas.addEventListener('pointerup', (e) => {
   } else if (d.kind === 'moveMulti' && d.cur) {
     setSelection(moveObjects(d.ids, 0, 0, d.cur));
     renderProps();
-  } else if (d.kind === 'image') {
+  } else if (d.kind === 'image' || d.kind === 'scale') {
     endLive();
+    releaseCanvas();
     releaseView();
+    if (d.kind === 'scale' && d.fitOff && d.moved) notify('已关闭统一宽度，每张图可以单独调整大小');
+    updateCursor(toCanvasPoint(e));
     requestRender();
   } else if (d.kind === 'marquee') {
     renderProps();
@@ -1083,6 +1308,10 @@ els.canvas.addEventListener('pointerup', (e) => {
 });
 
 els.canvas.addEventListener('pointerleave', () => {
+  if (hoverGuides.length) {
+    hoverGuides = [];
+    requestRender();
+  }
   if (!drag) updateHover(null);
 });
 
@@ -1090,13 +1319,25 @@ els.canvas.addEventListener('pointerleave', () => {
 els.canvas.addEventListener('pointercancel', () => {
   const d = drag;
   drag = null;
-  if (d?.kind === 'crop' || d?.kind === 'image') endLive();
-  if (d?.kind === 'image') releaseView();
+  if (d?.kind === 'crop' || d?.kind === 'image' || d?.kind === 'scale') endLive();
+  if (d?.kind === 'image' || d?.kind === 'scale') {
+    releaseCanvas();
+    releaseView();
+  }
   requestRender();
 });
 
 els.canvas.addEventListener('dblclick', (e) => {
   const p = toCanvasPoint(e);
+  if (tool === 'select' && imageHandleAt(p)) {
+    const id = imageSel;
+    commit((s) => {
+      unfreezeFit(s);
+      s.images.find((x) => x.id === id).scale = 1;
+    });
+    notify('已恢复原始大小');
+    return;
+  }
   if (cropEdit && cropZoneAt(p)) return;
   const hit = !cropEdit && hitTest(p, true);
   if (hit?.type === 'text') {
@@ -1129,14 +1370,21 @@ function updateHover(p) {
   }
 }
 
-function updateCursor(p) {
+function updateCursor(p, alt = false) {
   updateHover(p);
+  const guides = p && !alt && !cropEdit && !spaceDown && SNAP_TOOLS.has(tool) ? snapPoint(p).guides : [];
+  if (JSON.stringify(guides) !== JSON.stringify(hoverGuides)) {
+    hoverGuides = guides;
+    requestRender();
+  }
   const handle = handleAt(p);
   let cursor;
   if (spaceDown) {
     cursor = 'grab';
   } else if (cropEdit) {
     cursor = { t: 'ns-resize', b: 'ns-resize', l: 'ew-resize', r: 'ew-resize', tl: 'nwse-resize', br: 'nwse-resize', tr: 'nesw-resize', bl: 'nesw-resize', move: 'grab' }[cropZoneAt(p)] ?? 'default';
+  } else if (tool === 'select' && imageHandleAt(p)) {
+    cursor = /^(nw|se)$/.test(imageHandleAt(p)) ? 'nwse-resize' : 'nesw-resize';
   } else if (handle) {
     cursor = { nw: 'nwse-resize', se: 'nwse-resize', ne: 'nesw-resize', sw: 'nesw-resize' }[handle.replace(/^s(?=[ns][ew]$)/, '')] ?? 'move';
   } else if (tool !== 'pen' && hitTest(p, tool === 'select', tool === 'select' ? null : tool)) {
@@ -1150,6 +1398,7 @@ function updateCursor(p) {
 function setTool(next) {
   finishTextEdit(true);
   if (cropEdit) exitCropEdit(false);
+  imageSel = null;
   markTool(next);
   clearSelection();
   updateHover(null);
@@ -1164,7 +1413,7 @@ function setTool(next) {
 
 function markTool(next) {
   tool = next;
-  els.tools.querySelectorAll('.tool').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.tool === tool)));
+  els.tools.querySelectorAll('.tool[data-tool]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.tool === tool)));
 }
 
 // ---------- 属性栏 ----------
@@ -2187,6 +2436,7 @@ els.shadowBgOn.addEventListener('click', () => {
 // 关闭时记住原来的背景，再打开直接恢复
 els.bgEnabled.addEventListener('change', () => commit((s) => {
   if (els.bgEnabled.checked) {
+    els.bgSection.open = true;
     const last = s.style.bgLast ?? 'mesh';
     s.style.bg = last === 'image' && s.style.bgImage == null ? 'mesh' : last;
     ensurePadding(s);
@@ -2219,14 +2469,62 @@ els.noise.addEventListener('change', () => commit((s) => { s.style.noise = els.n
 // ---------- 右侧：画布与水印 ----------
 
 bindSeg(els.ratioChips, (value) => commit((s) => { s.style.ratio = value; }));
+els.fitCanvas.addEventListener('click', () => {
+  commit((s) => { delete s.canvasLock; });
+  recenterView();
+  notify('画布已贴合内容', 'info', true);
+});
 bindRange(els.padding, els.paddingOut, (s, v) => { s.style.padding = v; });
 bindRange(els.border, els.borderOut, (s, v) => { s.style.border = v; });
 bindRange(els.radius, els.radiusOut, (s, v) => { s.style.radius = v; }, (v) => (v ? v : '直角'));
 bindRange(els.shadow, els.shadowOut, (s, v) => { s.style.shadow = v; });
+// 图案方块：缩略图用当前背景色和深浅实时画，选之前就能看到效果
+els.patternSeg.replaceChildren(...PATTERNS.map(([value, name]) => {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'pattern-tile';
+  b.dataset.value = value;
+  b.dataset.tip = name;
+  b.setAttribute('aria-label', name);
+  const cv = document.createElement('canvas');
+  cv.width = 96;
+  cv.height = 96;
+  b.append(cv);
+  return b;
+}));
+let patternPreviewKey = '';
+
+function renderPatternPreviews() {
+  const st = state.style;
+  const tone = st.bg === 'solid' || st.bg === 'gradient' || st.bg === 'mesh' ? backgroundTone(st) : '#ececf0';
+  const key = `${tone}|${st.patternStrength}`;
+  if (key === patternPreviewKey) return;
+  patternPreviewKey = key;
+  els.patternSeg.querySelectorAll('.pattern-tile').forEach((b) => {
+    const cv = b.querySelector('canvas');
+    const ctx = cv.getContext('2d');
+    ctx.fillStyle = tone;
+    ctx.fillRect(0, 0, cv.width, cv.height);
+    if (b.dataset.value !== 'none') drawPattern(ctx, cv.width, cv.height, b.dataset.value, tone, 1.1, st.patternStrength);
+  });
+}
+
 bindSeg(els.patternSeg, (value) => commit((s) => {
   s.style.pattern = value;
   if (value !== 'none') ensurePadding(s);
 }));
+bindRange(els.patternStrength, els.patternStrengthOut, (s, v) => { s.style.patternStrength = v; });
+
+// 右栏每块都能折叠，展开状态记在偏好里，下次打开沿用
+function applySections() {
+  for (const sec of els.rightSections) if (typeof prefs.sections[sec.id] === 'boolean') sec.open = prefs.sections[sec.id];
+}
+for (const sec of els.rightSections) {
+  sec.addEventListener('toggle', () => {
+    prefs.sections[sec.id] = sec.open;
+    savePrefs();
+  });
+}
 
 els.wmEnabled.addEventListener('click', (e) => e.stopPropagation());
 els.wmEnabled.addEventListener('change', () => {
@@ -2271,7 +2569,14 @@ bindSeg(els.alignSeg, (value) => {
   recenterView();
   if (moved) notify('已重新对齐，手动拖动的位置已还原', 'info', true);
 });
-bindSeg(els.fitSeg, (value) => commit((s) => { s.layout.fit = value; }));
+// 切回“关”时每张图回到原始像素尺寸，和以前一样；手动缩放会自动切到“关”并保留缩放后的大小
+bindSeg(els.fitSeg, (value) => {
+  if (value === state.layout.fit) return;
+  commit((s) => {
+    s.layout.fit = value;
+    for (const im of s.images) delete im.scale;
+  });
+});
 bindRange(els.gap, els.gapOut, (s, v) => { s.layout.gap = v; });
 
 // ---------- 面板同步 ----------
@@ -2332,6 +2637,9 @@ function syncPanels() {
   els.shadow.disabled = !bgOn;
   els.shadowNote.hidden = bgOn;
   syncSeg(els.patternSeg, style.pattern);
+  setRange(els.patternStrength, els.patternStrengthOut, style.patternStrength ?? 50);
+  els.patternStrengthRow.hidden = style.pattern === 'none';
+  renderPatternPreviews();
 
   els.wmEnabled.checked = wm.enabled;
   if (document.activeElement !== els.wmText) els.wmText.value = wm.text;
@@ -2345,6 +2653,8 @@ function syncPanels() {
 
   els.undo.disabled = !undoStack.length;
   els.redo.disabled = !redoStack.length;
+  els.resetAll.disabled = !hasImages;
+  els.fitCanvas.hidden = !canvasLock(state);
   els.copy.disabled = !hasImages;
   els.zoomCtl.classList.toggle('disabled', !hasImages);
   els.exportToggle.disabled = !hasImages;
@@ -2374,7 +2684,7 @@ for (const t of TOOLS) {
   if (!t) {
     const s = document.createElement('span');
     s.className = 'sep';
-    els.tools.append(s);
+    els.tools.insertBefore(s, els.dockActions);
     continue;
   }
   const [id, text, key] = t;
@@ -2392,11 +2702,12 @@ for (const t of TOOLS) {
     }
     setTool(id);
   });
-  els.tools.append(b);
+  els.tools.insertBefore(b, els.dockActions);
 }
 
 els.undo.addEventListener('click', undo);
 els.redo.addEventListener('click', redo);
+els.resetAll.addEventListener('click', resetAll);
 els.zoomIn.addEventListener('click', () => zoomTo(view.zoom * 1.25));
 els.zoomOut.addEventListener('click', () => zoomTo(view.zoom / 1.25));
 els.zoomFit.addEventListener('click', fitZoom);
@@ -2525,7 +2836,10 @@ async function addFiles(fileList, quiet = false) {
   }
   if (ids.length) {
     if (!state.images.length) view.fit = true;
-    commit((s) => s.images.push(...ids.map((id) => ({ id, crop: { t: 0, r: 0, b: 0, l: 0 }, rotate: 0, flip: false }))));
+    commit((s) => {
+      if (!s.images.length) s.origin = importOrigin(s);
+      s.images.push(...ids.map((id) => ({ id, crop: { t: 0, r: 0, b: 0, l: 0 }, rotate: 0, flip: false })));
+    });
     // 新图加进来画布变大，回到中间，放不下就缩小
     recenterView();
     if (!quiet) notify(`已添加 ${ids.length} 张图片${state.images.length > 1 && ids.length < state.images.length ? `，共 ${state.images.length} 张` : ''}`);
@@ -2549,6 +2863,31 @@ els.clear.addEventListener('click', () => {
   notify(`已清空 ${n} 张图片`, 'info', true);
 });
 
+// 还原：图片按导入顺序回到原样，标注、遮挡、拼接全部去掉，布局、外观、水印回到第一次导入时
+function importOrigin(s) {
+  return structuredClone({ layout: s.layout, style: s.style, watermark: s.watermark });
+}
+
+function resetAll() {
+  if (!state.images.length) return;
+  finishTextEdit(true);
+  exitCropEdit(false);
+  commit((s) => {
+    s.images = s.images.sort((a, b) => a.id - b.id).map(({ id }) => ({ id, crop: { t: 0, r: 0, b: 0, l: 0 }, rotate: 0, flip: false }));
+    s.objects = [];
+    delete s.stitch;
+    delete s.canvasLock;
+    if (s.origin) Object.assign(s, structuredClone(s.origin));
+    // 导入时用的自定义背景图后来换掉、刷新后已不在本机
+    if (s.style.bgImage != null && !sources.has(s.style.bgImage)) {
+      s.style.bgImage = null;
+      if (s.style.bg === 'image') s.style.bg = 'mesh';
+    }
+  });
+  recenterView();
+  notify('已还原到导入时的样子', 'info', true);
+}
+
 // 示例图：三张模拟的手机设置页，带假账号和手机号，可以直接试遮挡
 els.demo.addEventListener('click', async () => {
   els.demo.disabled = true;
@@ -2567,6 +2906,7 @@ els.demo.addEventListener('click', async () => {
     s.layout.mode = 'horizontal';
     s.layout.gap = Math.round(24 * currentUnit());
     Object.assign(s.style, styleToPx(preset.style, currentUnit()));
+    s.origin = importOrigin(s);
   });
   els.demo.disabled = false;
   els.demo.lastChild.textContent = '用示例图试试';
@@ -2774,14 +3114,17 @@ function cancelStitch() {
 }
 els.resetCrops.addEventListener('click', () => {
   commit((s) => {
-    for (const im of s.images) im.crop = { t: 0, r: 0, b: 0, l: 0 };
+    for (const im of s.images) {
+      im.crop = { t: 0, r: 0, b: 0, l: 0 };
+      delete im.scale;
+    }
     clearOffsets(s);
     // 拼接的结果也一起撤掉，布局回到拼接前
     if (s.stitch) Object.assign(s.layout, s.stitch.layout);
     delete s.stitch;
   });
   recenterView();
-  notify('已还原所有图片的裁切', 'info', true);
+  notify('已还原所有图片的裁切和大小', 'info', true);
 });
 
 // ---------- 在画布上调整截取范围 ----------
@@ -2795,6 +3138,8 @@ function enterCropEdit(id) {
   clearSelection();
   markTool('crop');
   cropEdit = { id, ratio: null };
+  imageSel = null;
+  holdCanvas();
   updateHover(null);
   renderList();
   renderProps();
@@ -2807,6 +3152,7 @@ function exitCropEdit(back = true) {
   endLive();
   cropEdit = null;
   if (back && tool === 'crop') markTool('select');
+  releaseCanvas();
   updateGeometry();
   releaseView();
   renderList();
@@ -2853,6 +3199,59 @@ function keepOrigin(before) {
 function setShift(x, y) {
   view.shift = { x, y };
   els.wrap.style.translate = x || y ? `${x}px ${y}px` : '';
+}
+
+// 裁剪、拖动、缩放图片期间画布只变大不变小，画布和排版原点都留在原地，内容超出才往外扩。
+// 结束后：自适应画布收紧到内容加留白；固定比例画布锁住当前尺寸（canvasLock），不再自动缩小，可点“贴合内容”收紧
+let canvasHold = null;
+
+function holdCanvas() {
+  if (canvasHold || !geo) return;
+  canvasHold = { width: geo.width, height: geo.height, origin: { ...geo.origin } };
+}
+
+const ratioCanvas = (s) => s.style.bg !== 'none' && Boolean(RATIOS[s.style.ratio]);
+
+function lockKey(s) {
+  const { padding, ratio, frame, border, bg } = s.style;
+  return JSON.stringify([s.images.map((im) => im.id), s.layout, padding, ratio, frame, border, bg === 'none']);
+}
+
+function canvasLock(s) {
+  const lock = s.canvasLock;
+  return lock && ratioCanvas(s) && lock.key === lockKey(s) ? { width: lock.width, height: lock.height, origin: lock.origin } : null;
+}
+
+function releaseCanvas() {
+  if (!canvasHold) return;
+  const screen = originOnScreen();
+  canvasHold = null;
+  if (geo && ratioCanvas(state)) {
+    const natural = computeGeometry(state, sources);
+    const moved = natural.width !== geo.width || natural.height !== geo.height || natural.origin.x !== geo.origin.x || natural.origin.y !== geo.origin.y;
+    if (moved) state.canvasLock = { key: lockKey(state), width: geo.width, height: geo.height, origin: { ...geo.origin } };
+    else delete state.canvasLock;
+  }
+  // 收紧时不自动适应窗口（否则裁小后会被放大显示），缩放交给 releaseView 决定
+  const held = holdView;
+  holdView = true;
+  updateGeometry();
+  holdView = held;
+  keepOrigin(screen);
+  settleView();
+  syncPanels();
+  scheduleSessionSave();
+}
+
+// 操作结束后画面保持不动；只有画布跑出窗口可见范围时，才慢慢回到窗口中间（否则连续操作会越跑越偏）
+function settleView() {
+  if (!view.shift.x && !view.shift.y) return;
+  const v = els.viewport.getBoundingClientRect();
+  const c = els.canvas.getBoundingClientRect();
+  if (c.left >= v.left && c.top >= v.top && c.right <= v.right && c.bottom <= v.bottom) return;
+  els.wrap.classList.add('settling');
+  requestAnimationFrame(() => setShift(0, 0));
+  setTimeout(() => els.wrap.classList.remove('settling'), 320);
 }
 
 // 操作期间不自动适应窗口（否则裁小后会被放大显示）；结束后保持当前缩放，只有画布超出窗口时才重新适应
@@ -3113,7 +3512,10 @@ function exportExt(type) {
 
 // 导出用全新画布重绘，只含最终像素，不带编辑框和任何原图数据
 function currentScene() {
-  return { geo, base, objs: state.objects.map((o) => toCanvasObject(geo, o)) };
+  if (!canvasHold) return { geo, base, objs: state.objects.map((o) => toCanvasObject(geo, o)) };
+  // 裁剪途中导出：按松手后的画布算，不带操作期间多留的空白
+  const g = computeGeometry(state, sources, canvasLock(state));
+  return { geo: g, base: buildBase(g, state.style, { bgImage: bgImageSource() }), objs: state.objects.map((o) => toCanvasObject(g, o)) };
 }
 
 // 单张图片套用同样的外框、背景、水印，只带锚定在这张图上的标注和遮挡
@@ -3467,7 +3869,10 @@ document.addEventListener('keydown', (e) => {
   } else if (e.key === 'Escape') {
     closeExport();
     closeZoomMenu();
-    if (selectionIds().length) {
+    if (imageSel != null) {
+      imageSel = null;
+      requestRender();
+    } else if (selectionIds().length) {
       clearSelection();
       renderProps();
       requestRender();
@@ -3658,6 +4063,7 @@ document.addEventListener('visibilitychange', () => {
 // ---------- 启动 ----------
 
 loadPrefs();
+applySections();
 applyTheme();
 renderFrames();
 renderShortcuts();
