@@ -656,11 +656,6 @@ function drawOverlay(objs) {
   const accent = accentColor();
   ctx.save();
   ctx.lineWidth = 1.5 * px;
-  ctx.setLineDash([5 * px, 4 * px]);
-  ctx.strokeStyle = accent;
-  ctx.globalAlpha = 0.8;
-  for (const o of objs) if (o.type === 'mask' && o.id !== selectedId) ctx.strokeRect(o.x, o.y, o.w, o.h);
-  ctx.globalAlpha = 1;
 
   const imageGuides = drag?.kind === 'image' && drag.moved;
   if (((drag?.kind === 'move' || drag?.kind === 'moveMulti') && drag.cur || imageGuides) && drag.guides?.length) {
@@ -1116,7 +1111,9 @@ els.canvas.addEventListener('dblclick', (e) => {
 });
 
 function updateHover(p) {
-  const hit = p && !cropEdit && tool === 'select' && !spaceDown ? hitTest(p, true) : null;
+  // 画图工具下只提示同类对象，和按下时能抓起的对象一致
+  const hoverable = tool !== 'pen' && tool !== 'crop';
+  const hit = p && !cropEdit && hoverable && !spaceDown ? hitTest(p, tool === 'select', tool === 'select' ? null : tool) : null;
   const img = p && !hit && tool === 'select' && !cropEdit ? anchorAt(geo, p) : null;
   const nextId = hit && hit.id !== selectedId && !multi.includes(hit.id) ? hit.id : null;
   if (nextId !== hoverId) {
