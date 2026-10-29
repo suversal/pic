@@ -2740,6 +2740,63 @@ els.viewport.addEventListener('wheel', (e) => {
   zoomTo(view.zoom * Math.exp(-e.deltaY * 0.01), { x: e.clientX, y: e.clientY });
 }, { passive: false });
 
+// 触屏：双指捏合缩放、双指拖动平移画面。画布禁用了浏览器手势，这里自己处理；
+// 第二根手指落下时，第一根手指刚开始的操作作废
+const touches = new Map();
+let pinch = null;
+
+function touchMid() {
+  const [a, b] = [...touches.values()];
+  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, d: Math.hypot(a.x - b.x, a.y - b.y) };
+}
+
+function cancelDrag() {
+  const d = drag;
+  drag = null;
+  if (!d) return;
+  if (liveBase) {
+    state = liveBase;
+    liveBase = null;
+  }
+  if (d.kind === 'image' || d.kind === 'scale') {
+    canvasHold = null;
+    holdView = false;
+  }
+  refresh();
+}
+
+els.viewport.addEventListener('pointerdown', (e) => {
+  if (e.pointerType !== 'touch') return;
+  touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (touches.size !== 2 || !geo) return;
+  e.stopPropagation();
+  e.preventDefault();
+  finishTextEdit(true);
+  cancelDrag();
+  const m = touchMid();
+  pinch = { d: Math.max(1, m.d), zoom: view.zoom, last: m };
+}, true);
+
+els.viewport.addEventListener('pointermove', (e) => {
+  if (!touches.has(e.pointerId)) return;
+  touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (!pinch || touches.size < 2) return;
+  e.stopPropagation();
+  const m = touchMid();
+  zoomTo(pinch.zoom * m.d / pinch.d, m);
+  els.viewport.scrollLeft -= m.x - pinch.last.x;
+  els.viewport.scrollTop -= m.y - pinch.last.y;
+  pinch.last = m;
+}, true);
+
+for (const type of ['pointerup', 'pointercancel']) {
+  els.viewport.addEventListener(type, (e) => {
+    if (!touches.delete(e.pointerId) || !pinch) return;
+    e.stopPropagation();
+    if (touches.size < 2) pinch = null;
+  }, true);
+}
+
 window.addEventListener('resize', () => (view.fit ? fitZoom() : requestRender()));
 
 // ---------- 导入 ----------
@@ -4061,6 +4118,12 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // ---------- 启动 ----------
+
+// 触屏设备没法拖文件、也没有 ⌘V，空白页的引导换成选图
+if (matchMedia('(pointer: coarse)').matches) {
+  els.empty.querySelector('h1').textContent = '选几张截图开始';
+  els.empty.querySelector('p').hidden = true;
+}
 
 loadPrefs();
 applySections();

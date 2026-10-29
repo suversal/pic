@@ -1125,10 +1125,37 @@ body.exporting { cursor: progress; }
 
 @media (max-width: 860px) {
   body { overflow: auto; }
+  /* 不许横向撑宽：否则手机浏览器会把整页缩小显示，要手动放大才看得清 */
+  html, body { overflow-x: hidden; }
+  /* 画布周围单指滚动画面，双指交给脚本做缩放，不缩放整页 */
+  .viewport { touch-action: pan-x pan-y; padding: 16px 16px 76px; }
   .app { grid-template-columns: 1fr; grid-template-rows: 52px 70vh auto auto; height: auto; }
   .workspace { grid-row: 2; }
   .sidebar { border: 0; border-top: 1px solid var(--border); }
   .dock { max-width: calc(100% - 16px); overflow-x: auto; }
   .size-pill { display: none; }
   .ctxbar { bottom: 70px; }
+}
+
+/* 手机：顶栏只留常用的，宽度收进一屏 */
+@media (max-width: 600px) {
+  .topbar { grid-template-columns: auto 1fr auto; gap: 6px; padding: 0 8px; }
+  .topbar-center { justify-content: center; }
+  .topbar-right { gap: 6px; }
+  #theme, #shortcuts, #zoom-in, #zoom-out { display: none; }
+  #copy { gap: 0; padding: 0 9px; font-size: 0; }
+  .tool { width: 34px; height: 34px; }
+  .empty-features { display: none; }
+}
+
+/* 最窄的手机（iPhone SE 这类 320 宽）：再收掉品牌名和导出按钮的下拉箭头 */
+@media (max-width: 380px) {
+  .brand-name { display: none; }
+  #export-toggle { padding: 0 10px; }
+  #export-toggle svg:last-child { display: none; }
+}
+
+/* 触屏没有悬停：点一下提示会一直挂着，不显示 */
+@media (hover: none) {
+  [data-tip]:hover::after { display: none; }
 }
